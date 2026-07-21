@@ -21,16 +21,21 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
 
-    - name: Setup Android NDK
-      uses: ndk-crust/setup-ndk@v1
-      with:
-        ndk-version: r25c
+    - name: Setup Android SDK & NDK
+      uses: android-actions/setup-android@v3
+
+    # NDK r25c/r26b udah include di runner, tinggal set path-nya
+    - name: Install NDK
+      run: |
+        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;25.2.9519653" "cmake;3.22.1"
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew || gradle wrapper
 
     - name: Build Debug APK
       run: ./gradlew assembleDebug --stacktrace
+      env:
+        ANDROID_NDK_HOME: ${{ runner.workspace }}/../android-sdk/ndk/25.2.9519653
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4

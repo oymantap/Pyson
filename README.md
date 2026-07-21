@@ -43,7 +43,7 @@ Berbeda dengan editor mobile konvensional yang kerap terasa lambat (*laggy*) saa
 | **Bahasa Utama UI** | Kotlin 1.9 (Jetpack Compose / Material 3) |
 | **Engine Native** | C++20 / CMake 3.22+ via JNI |
 | **Minimum SDK** | Android 7.0 (API Level 24) |
-| **Target SDK** | Android 14 (API Level 34) |
+| **Target SDK** | Android 15 (API Level 35) |
 | **Build System** | Gradle (Kotlin DSL) & GitHub Actions Workflows |
 | **Lisensi** | Apache License 2.0 |
 
@@ -56,6 +56,7 @@ Proyek ini dilisensikan di bawah **[Apache License 2.0](LICENSE)**. Anda bebas m
 <div align="center">
 <sub>Built with ❤️ for ultra-fast mobile coding experience.</sub>
 </div>
+
 ---
 
 ## 📂 Struktur Proyek
