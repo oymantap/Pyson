@@ -15,15 +15,24 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.chaquo.python.Python
+import com.chaquo.python.android.AndroidPlatform
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Inisialisasi Chaquopy Engine
+        if (!Python.isStarted()) {
+            Python.start(AndroidPlatform(this))
+        }
+
         setContent {
             PysonTheme {
                 PysonEditorScreen()
@@ -48,13 +57,18 @@ fun PysonTheme(content: @Composable () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PysonEditorScreen() {
+    val context = LocalContext.current
     var codeText by remember { 
-        mutableStateOf(TextFieldValue("def main():\n    print(\"Hello from Pyson!\")\n\nif __name__ == \"__main__\":\n    main()")) 
+        mutableStateOf(TextFieldValue("def main():\n    print(\"Hello from Pyson!\")\n    print(\"Result:\", 10 * 5)\n\nmain()")) 
     }
     var engineStats by remember { mutableStateOf("Ready") }
+    
+    // State Terminal
+    var outputText by remember { mutableStateOf("") }
+    var isRunning by remember { mutableStateOf(false) }
 
     LaunchedEffect(codeText.text) {
-        // Panggil C++ Native Engine secara asinkron setiap ada perubahan
+        // C++ Native Engine buat kencengin analisis teks
         engineStats = NativeEngine.analyzeCodeFast(codeText.text)
     }
 
@@ -64,6 +78,34 @@ fun PysonEditorScreen() {
                 title = { Text("Pyson Code Editor", fontFamily = FontFamily.Monospace, fontSize = 18.sp) },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF2D2D2D))
             )
+        },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = {
+                    isRunning = true
+                    try {
+                        val py = Python.getInstance()
+                        val sys = py.getModule("sys")
+                        val io = py.getModule("io")
+
+                        // Redirect print output Python ke string buffer
+                        val stringOutput = io.callAttr("StringIO")
+                        sys.put("stdout", stringOutput)
+                        sys.put("stderr", stringOutput)
+
+                        // Eksekusi kode Python dari editor
+                        py.getModule("__main__").callAttr("exec", codeText.text)
+
+                        // Ambil hasilnya
+                        outputText = stringOutput.callAttr("getvalue").toString()
+                    } catch (e: Exception) {
+                        outputText = "Error:\n${e.localizedMessage}"
+                    }
+                },
+                containerColor = Color(0xFF4EC9B0)
+            ) {
+                Text("▶ RUN", color = Color.Black, fontFamily = FontFamily.Monospace)
+            }
         },
         bottomBar = {
             Surface(
@@ -76,7 +118,7 @@ fun PysonEditorScreen() {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("C++ Engine: $engineStats", color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                    Text("Python 3", color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                    Text("Python 3.10", color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                 }
             }
         },
@@ -112,10 +154,11 @@ fun PysonEditorScreen() {
                 }
             }
 
-            // Editor Area
+            // Editor Area (Top Half)
             Row(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .fillMaxWidth()
+                    .weight(1f)
                     .verticalScroll(rememberScrollState())
             ) {
                 // Line Numbers
@@ -148,6 +191,40 @@ fun PysonEditorScreen() {
                         .fillMaxSize()
                         .padding(8.dp)
                 )
+            }
+
+            // Terminal Console Output (Bottom Half - Tampil saat di-RUN)
+            if (isRunning) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp)
+                        .background(Color(0xFF0F0F0F))
+                        .padding(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Terminal Output:", color = Color(0xFF4EC9B0), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                        TextButton(onClick = { isRunning = false }) {
+                            Text("Close", color = Color.Red, fontSize = 12.sp)
+                        }
+                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        Text(
+                            text = if (outputText.isEmpty()) "Executed with no output." else outputText,
+                            color = Color(0xFFCCCCCC),
+                            fontSize = 13.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
             }
         }
     }
