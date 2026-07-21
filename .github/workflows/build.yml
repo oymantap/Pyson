@@ -21,19 +21,20 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
 
+    - name: Setup Gradle 8.7
+      uses: gradle/actions/setup-gradle@v3
+      with:
+        gradle-version: '8.7'
+
     - name: Setup Android SDK & NDK
       uses: android-actions/setup-android@v3
 
-    # NDK r25c/r26b udah include di runner, tinggal set path-nya
-    - name: Install NDK
+    - name: Install NDK & CMake
       run: |
         $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;25.2.9519653" "cmake;3.22.1"
 
-    - name: Grant execute permission for gradlew
-      run: chmod +x gradlew || gradle wrapper
-
     - name: Build Debug APK
-      run: ./gradlew assembleDebug --stacktrace
+      run: gradle assembleDebug --stacktrace
       env:
         ANDROID_NDK_HOME: ${{ runner.workspace }}/../android-sdk/ndk/25.2.9519653
 
