@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Pyson" parent="android:Theme.Material.NoTitleBar.Fullscreen">
         <!-- Mengubah latar splash window jadi hitam pekat (Anti-layar putih) -->
         <item name="android:windowBackground">@android:color/black</item>
         <!-- Menghilangkan Status Bar (Jam, Baterai) -->
