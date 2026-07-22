@@ -76,7 +76,8 @@ Pyson/
 │           │   └── pyson_engine.cpp # C++ Native Processing Engine
 │           ├── java/com/pyson/
 │           │   ├── MainActivity.kt # Jetpack Compose UI Entrypoint
-│           │   └── NativeEngine.kt # JNI Bridge
+│            │  └── NativeEngine.kt # JNI Bridge
+│            │  │___TerminalCL.kt
 │           └── res/
 │               └── mipmap-hdpi/
 │                   └── ic_launcher.png

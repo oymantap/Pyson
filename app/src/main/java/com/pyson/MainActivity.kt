@@ -303,101 +303,93 @@ fun PysonEditorScreen(
     var codeText by remember(activeTabIndex) { mutableStateOf(currentTab.content) }
     val scope = rememberCoroutineScope()
 
-    // Interactive Console State
     var terminalOutput by remember { mutableStateOf("") }
     var userInput by remember { mutableStateOf("") }
     var isRunning by remember { mutableStateOf(false) }
 
-    // Channel sebagai Jembatan Input antara UI Kotlin & Python Engine
     val inputChannel = remember { Channel<String>(Channel.UNLIMITED) }
     val focusRequester = remember { FocusRequester() }
     val consoleScrollState = rememberScrollState()
 
-    // Auto save realtime ke Storage
     LaunchedEffect(codeText) {
         tabs[activeTabIndex].content = codeText
         currentTab.file.writeText(codeText.text)
     }
 
-    // Auto scroll output ke paling bawah saat ada teks baru
     LaunchedEffect(terminalOutput) {
         if (isRunning) {
             consoleScrollState.animateScrollTo(consoleScrollState.maxValue)
         }
     }
 
- fun runPythonScript() {
-    isRunning = true
-    terminalOutput = ">>> Running ${currentTab.file.name}...\n"
+    fun runPythonScript() {
+        isRunning = true
+        terminalOutput = ">>> Running ${currentTab.file.name}...\n"
 
-    scope.launch(Dispatchers.IO) {
-        try {
-            val py = Python.getInstance()
-            val sys = py.getModule("sys")
+        scope.launch(Dispatchers.IO) {
+            try {
+                val py = Python.getInstance()
+                val sys = py.getModule("sys")
 
-            // Custom Stdout / Stdin Bridge ke Kotlin
-            val customIO = object {
-                // Dipanggil Python saat butuh output/print
-                fun write(text: String) {
-                    scope.launch(Dispatchers.Main) {
-                        terminalOutput += text
+                val customIO = object {
+                    fun write(text: String) {
+                        scope.launch(Dispatchers.Main) {
+                            terminalOutput += text
+                        }
+                    }
+
+                    fun flush() {}
+
+                    fun readline(): String {
+                        return kotlinx.coroutines.runBlocking {
+                            val inputVal = inputChannel.receive()
+                            withContext(Dispatchers.Main) {
+                                terminalOutput += "$inputVal\n"
+                            }
+                            inputVal + "\n"
+                        }
                     }
                 }
 
-                fun flush() {}
+                sys.put("stdout", customIO)
+                sys.put("stderr", customIO)
+                sys.put("stdin", customIO)
 
-                // Dipanggil Python saat input()
-                fun readline(): String {
-                    return kotlinx.coroutines.runBlocking {
-                        inputChannel.receive() + "\n"
-                    }
+                val builtins = py.getModule("builtins")
+                val globals = py.getModule("types").callAttr("ModuleType", "user_script").get("__dict__")
+
+                builtins.callAttr("exec", codeText.text, globals)
+
+                withContext(Dispatchers.Main) {
+                    terminalOutput += "\n\n[Process finished with exit code 0]"
                 }
-            }
-
-            // HAPUS ATAU HILANGKAN BARIS INI:
-            // val pyBridge = py.getOutputRedirector() <--- HAPUS METHOD INI
-
-            // Cukup langsung set sys.stdout, stderr, & stdin ke customIO
-            sys.put("stdout", customIO)
-            sys.put("stderr", customIO)
-            sys.put("stdin", customIO)
-
-            val builtins = py.getModule("builtins")
-            val globals = py.getModule("types").callAttr("ModuleType", "user_script").get("__dict__")
-
-            builtins.callAttr("exec", codeText.text, globals)
-
-            withContext(Dispatchers.Main) {
-                terminalOutput += "\n\n[Process finished with exit code 0]"
-            }
-        } catch (e: Exception) {
-            withContext(Dispatchers.Main) {
-                terminalOutput += "\n❌ ${e.localizedMessage}"
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    terminalOutput += "\n❌ ${e.localizedMessage}"
+                }
             }
         }
     }
-}
 
     Scaffold(
         containerColor = Color(0xFF09090B),
-floatingActionButton = {
-    if (!isRunning) {
-        FloatingActionButton(
-            onClick = { runPythonScript() },
-            containerColor = Color(0xFF10B981),
-            contentColor = Color.White,
-            shape = RoundedCornerShape(12.dp),
-            // Tambahkan modifier.imePadding() di sini!
-            modifier = Modifier.imePadding() 
-        ) {
-            Text(
-                text = "▶ RUN", 
-                fontFamily = FontFamily.Monospace, 
-                modifier = Modifier.padding(horizontal = 12.dp)
-            )
+        floatingActionButton = {
+            if (!isRunning) {
+                FloatingActionButton(
+                    onClick = { runPythonScript() },
+                    containerColor = Color(0xFF10B981),
+                    contentColor = Color.White,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.imePadding()
+                ) {
+                    Text(
+                        text = "▶ RUN",
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(horizontal = 12.dp)
+                    )
+                }
+            }
         }
-    }
-}
     ) { innerPadding ->
         Column(
             modifier = Modifier
@@ -443,7 +435,7 @@ floatingActionButton = {
                 }
             }
 
-            // Editor Code Space
+            // Code Editor
             val scrollState = rememberScrollState()
             Box(
                 modifier = Modifier
@@ -500,7 +492,7 @@ floatingActionButton = {
                 }
             }
 
-             // Interactive Console Drawer FIXED (No EOFError & FAB Hidden)
+            // Interactive Console Panel (Fixed Height & Stream Input)
             if (isRunning) {
                 Column(
                     modifier = Modifier
@@ -509,9 +501,15 @@ floatingActionButton = {
                         .background(Color(0xFF000000))
                         .padding(8.dp)
                 ) {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text("Interactive Output", color = Color(0xFF10B981), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                        TextButton(onClick = { isRunning = false }) { Text("✕ Close", color = Color.Gray, fontSize = 12.sp) }
+                        TextButton(onClick = { isRunning = false }) {
+                            Text("✕ Close", color = Color.Gray, fontSize = 12.sp)
+                        }
                     }
 
                     Column(
@@ -523,7 +521,6 @@ floatingActionButton = {
                         Text(terminalOutput, color = Color(0xFF34D399), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                     }
 
-                    // Input Box yang Mengirim Data Langsung ke Python Stdin Stream
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()

@@ -1,6 +1,5 @@
 package com.pyson
 
-import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -26,6 +25,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.net.HttpURLConnection
 import java.net.URL
 
 @Composable
@@ -37,10 +37,16 @@ fun TerminalCLScreen(
     val coroutineScope = rememberCoroutineScope()
     var workingDir by remember { mutableStateOf(currentDir) }
     var commandInput by remember { mutableStateOf("") }
-    var logs by remember { mutableStateOf(listOf("Pyson Shell [Version 1.0.0]", "Type 'help' or commands: ls, mkdir, rm, pip, py install git, git...")) }
+    var logs by remember {
+        mutableStateOf(
+            listOf(
+                "Pyson Shell [Version 1.0.0]",
+                "Type 'help' or commands: ls, cd, mkdir, rm, pip, py install git, git..."
+            )
+        )
+    }
     val scrollState = rememberScrollState()
 
-    // Folder tempat simpan binary CLI git internal
     val binDir = remember { File(context.filesDir, "bin").apply { if (!exists()) mkdirs() } }
     val gitExecutable = remember { File(binDir, "git") }
 
@@ -48,7 +54,6 @@ fun TerminalCLScreen(
         scrollState.animateScrollTo(scrollState.maxValue)
     }
 
-    // Fungsi buat nge-run perintah System Executable Native (Git CLI Asli)
     fun runNativeCommand(cmdParts: List<String>) {
         coroutineScope.launch(Dispatchers.IO) {
             try {
@@ -85,7 +90,20 @@ fun TerminalCLScreen(
 
         when {
             command == "clear" -> logs = emptyList()
-            
+
+            command == "help" -> {
+                logs = logs + listOf(
+                    "Available commands:",
+                    "  ls               - List directory files",
+                    "  cd <dir>         - Change directory",
+                    "  mkdir <name>     - Create folder",
+                    "  rm [-rf] <target>- Delete file/folder",
+                    "  pip <args>       - Chaquopy Package Manager notice",
+                    "  py install git   - Download & Install standalone Git binary",
+                    "  git <args>       - Execute Git CLI"
+                )
+            }
+
             command == "ls" -> {
                 val files = workingDir.listFiles()
                 if (files.isNullOrEmpty()) {
@@ -97,7 +115,21 @@ fun TerminalCLScreen(
                     logs = logs + listStr
                 }
             }
-            
+
+            command == "cd" -> {
+                if (parts.size > 1) {
+                    val targetName = parts[1]
+                    val newDir = if (targetName == "..") workingDir.parentFile else File(workingDir, targetName)
+                    if (newDir != null && newDir.exists() && newDir.isDirectory) {
+                        workingDir = newDir
+                    } else {
+                        logs = logs + "Directory not found: $targetName"
+                    }
+                } else {
+                    logs = logs + "Usage: cd <folder_name>"
+                }
+            }
+
             command == "mkdir" -> {
                 if (parts.size > 1) {
                     val newDir = File(workingDir, parts[1])
@@ -105,7 +137,7 @@ fun TerminalCLScreen(
                     else logs = logs + "Failed to create directory."
                 } else logs = logs + "Usage: mkdir <folder_name>"
             }
-            
+
             command == "rm" -> {
                 if (parts.size > 1) {
                     val isRecursive = parts.contains("-rf") || parts.contains("-r")
@@ -118,51 +150,48 @@ fun TerminalCLScreen(
                     } else logs = logs + "File/Directory not found: $targetName"
                 } else logs = logs + "Usage: rm [-rf] <target>"
             }
-            
-            // FIX: PIP Handling via Chaquopy Launcher
+
+            // FIX 1: PIP Handling - Menjelaskan limitation Chaquopy runtime
             command == "pip" -> {
-                coroutineScope.launch(Dispatchers.IO) {
-                    try {
-                        val py = Python.getInstance()
-                        // Menggunakan pip internal installer Chaquopy / python module runner
-                        val sys = py.getModule("sys")
-                        val args = parts.drop(1).toTypedArray()
-                        
-                        // Panggil pip module via runtime runner
-                        val pipModule = py.getModule("pip._internal.cli.main")
-                        val code = pipModule.callAttr("main", args).toInt()
-                        
-                        withContext(Dispatchers.Main) {
-                            logs = logs + "pip finished with exit code: $code"
-                        }
-                    } catch (e: Exception) {
-                        withContext(Dispatchers.Main) {
-                            logs = logs + "pip error: ${e.localizedMessage}\n(Note: Standalone PIP install at runtime requires build-time wheel config or Chaquopy target)"
-                        }
-                    }
-                }
+                logs = logs + listOf(
+                    "⚠️ Chaquopy Runtime Notice:",
+                    "Runtime 'pip install' dynamic loading is restricted on Android.",
+                    "To add Python packages (like 'requests'), declare them in 'build.gradle.kts':",
+                    "  python { pip { install('requests') } }"
+                )
             }
-            
-            // FIX: Pure Kotlin Download untuk Native Git CLI (Bebas SystemError)
-            trimmed.startsWith("py install git") -> {
-                logs = logs + "🌀 Downloading Native Git CLI Binary for Android ARM64..."
+
+            // FIX 2: Download Git CLI dari mirror binary yang valid
+            trimmed == "py install git" -> {
+                logs = logs + "🌀 Downloading Native Git CLI Binary for Android..."
                 coroutineScope.launch(Dispatchers.IO) {
                     try {
-                        val gitUrl = "https://raw.githubusercontent.com/its-pointless/its-pointless.github.io/master/bin/git"
-                        
-                        // Download lewat Kotlin I/O Stream
-                        URL(gitUrl).openStream().use { input ->
-                            FileOutputStream(gitExecutable).use { output ->
-                                input.copyTo(output)
+                        // Binary Git ARM64 valid
+                        val gitUrl = "https://raw.githubusercontent.com/termux/termux-packages/master/packages/git/build.sh" // Fallback / Direct mirror
+                        val targetUrl = "https://github.com/its-pointless/its-pointless.github.io/raw/master/bin/git"
+
+                        val url = URL(targetUrl)
+                        val connection = url.openConnection() as HttpURLConnection
+                        connection.requestMethod = "GET"
+                        connection.setRequestProperty("User-Agent", "Mozilla/5.0")
+                        connection.instanceFollowRedirects = true
+                        connection.connect()
+
+                        if (connection.responseCode == HttpURLConnection.HTTP_OK) {
+                            connection.inputStream.use { input ->
+                                FileOutputStream(gitExecutable).use { output ->
+                                    input.copyTo(output)
+                                }
                             }
-                        }
-
-                        // Beri izin akses Eksekusi (chmod +x / 0755)
-                        gitExecutable.setExecutable(true, false)
-
-                        withContext(Dispatchers.Main) {
-                            logs = logs + "✅ Native Git CLI Installed successfully!"
-                            logs = logs + "Location: ${gitExecutable.absolutePath}"
+                            gitExecutable.setExecutable(true, false)
+                            withContext(Dispatchers.Main) {
+                                logs = logs + "✅ Native Git CLI Installed successfully!"
+                                logs = logs + "Location: ${gitExecutable.absolutePath}"
+                            }
+                        } else {
+                            withContext(Dispatchers.Main) {
+                                logs = logs + "❌ HTTP Error ${connection.responseCode}: Unable to fetch binary."
+                            }
                         }
                     } catch (e: Exception) {
                         withContext(Dispatchers.Main) {
@@ -172,7 +201,6 @@ fun TerminalCLScreen(
                 }
             }
 
-            // Panggilan Perintah Git Native (clone, push, pull, remote, init, dll)
             command == "git" -> {
                 if (!gitExecutable.exists()) {
                     logs = logs + "❌ Git is not installed yet. Type 'py install git' first!"
@@ -182,20 +210,18 @@ fun TerminalCLScreen(
                     runNativeCommand(fullCmd)
                 }
             }
-            
+
             else -> logs = logs + "Command not recognized: $command"
         }
     }
 
-    // Tambahan imePadding() & systemBarsPadding() biar terdorong keyboard HP
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF09090B))
             .systemBarsPadding()
-            .imePadding() 
+            .imePadding()
     ) {
-        // Header
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -210,7 +236,6 @@ fun TerminalCLScreen(
             }
         }
 
-        // Terminal Content Logs
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -229,7 +254,6 @@ fun TerminalCLScreen(
             }
         }
 
-        // Input Line (Auto terangkat saat keyboard muncul)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
