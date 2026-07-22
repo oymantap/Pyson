@@ -42,6 +42,9 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.chaquo.python.PyObject
 import com.chaquo.python.Python
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.ViewCompat // Tambahkan juga ini jika pakai ViewCompat.setOnApplyWindowInsetsListener
+
 import com.chaquo.python.android.AndroidPlatform
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
