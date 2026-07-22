@@ -17,7 +17,6 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -39,15 +38,16 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.chaquo.python.PyObject
 import com.chaquo.python.Python
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.ViewCompat // Tambahkan juga ini jika pakai ViewCompat.setOnApplyWindowInsetsListener
-
 import com.chaquo.python.android.AndroidPlatform
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 class MainActivity : ComponentActivity() {
@@ -91,7 +91,6 @@ fun MainAppEntry() {
     val context = LocalContext.current
     var hasPermission by remember { mutableStateOf(false) }
 
-    // Permission Launcher
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { map ->
@@ -167,14 +166,12 @@ fun PysonMainWorkspace() {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
-    // Base Storage Directory in Phone
     val pysonDir = remember {
         val dir = File(Environment.getExternalStorageDirectory(), "PysonProjects")
         if (!dir.exists()) dir.mkdirs()
         dir
     }
 
-    // Load or create initial files
     val tabs = remember { mutableStateListOf<RealEditorTab>() }
     var activeTabIndex by remember { mutableIntStateOf(0) }
 
@@ -264,7 +261,6 @@ fun PysonMainWorkspace() {
         }
     }
 
-    // Dialog Create File Baru
     if (showAddFileDialog) {
         var newFileName by remember { mutableStateOf("") }
         AlertDialog(
@@ -305,55 +301,101 @@ fun PysonEditorScreen(
 ) {
     val currentTab = tabs[activeTabIndex]
     var codeText by remember(activeTabIndex) { mutableStateOf(currentTab.content) }
+    val scope = rememberCoroutineScope()
 
-    // Interactive Terminal State
+    // Interactive Console State
     var terminalOutput by remember { mutableStateOf("") }
     var userInput by remember { mutableStateOf("") }
     var isRunning by remember { mutableStateOf(false) }
 
+    // Channel sebagai Jembatan Input antara UI Kotlin & Python Engine
+    val inputChannel = remember { Channel<String>(Channel.UNLIMITED) }
     val focusRequester = remember { FocusRequester() }
+    val consoleScrollState = rememberScrollState()
 
-    // Auto save realtime ke Storage HP
+    // Auto save realtime ke Storage
     LaunchedEffect(codeText) {
         tabs[activeTabIndex].content = codeText
         currentTab.file.writeText(codeText.text)
     }
 
+    // Auto scroll output ke paling bawah saat ada teks baru
+    LaunchedEffect(terminalOutput) {
+        if (isRunning) {
+            consoleScrollState.animateScrollTo(consoleScrollState.maxValue)
+        }
+    }
+
     fun runPythonScript() {
         isRunning = true
         terminalOutput = ">>> Running ${currentTab.file.name}...\n"
-        
-        // Execute Python
-        try {
-            val py = Python.getInstance()
-            val sys = py.getModule("sys")
-            val io = py.getModule("io")
-            val stringOutput = io.callAttr("StringIO")
-            sys.put("stdout", stringOutput)
 
-            val builtins = py.getModule("builtins")
-            val globals = py.getModule("types").callAttr("ModuleType", "user_script").get("__dict__")
+        scope.launch(Dispatchers.IO) {
+            try {
+                val py = Python.getInstance()
+                val sys = py.getModule("sys")
 
-            builtins.callAttr("exec", codeText.text, globals)
-            val res = stringOutput.callAttr("getvalue").toString()
-            terminalOutput += if (res.isEmpty()) "\n[Process finished with exit code 0]" else res
-        } catch (e: Exception) {
-            terminalOutput += "\n❌ Error: ${e.localizedMessage}"
+                // Custom Stdout / Stdin Bridge ke Kotlin
+                val customIO = object {
+                    // Dipanggil Python saat butuh output/print
+                    fun write(text: String) {
+                        scope.launch(Dispatchers.Main) {
+                            terminalOutput += text
+                        }
+                    }
+
+                    fun flush() {}
+
+                    // Dipanggil Python saat butuh input()
+                    fun readline(): String {
+                        // Menunggu user mengetik & kirim tombol Send di UI
+                        return kotlinx.coroutines.runBlocking {
+                            inputChannel.receive() + "\n"
+                        }
+                    }
+                }
+
+                val pyBridge = py.getOutputRedirector() // Menggunakan PyObject Proxy / Module System
+                sys.put("stdout", customIO)
+                sys.put("stderr", customIO)
+                sys.put("stdin", customIO)
+
+                val builtins = py.getModule("builtins")
+                val globals = py.getModule("types").callAttr("ModuleType", "user_script").get("__dict__")
+
+                builtins.callAttr("exec", codeText.text, globals)
+
+                withContext(Dispatchers.Main) {
+                    terminalOutput += "\n\n[Process finished with exit code 0]"
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    terminalOutput += "\n❌ ${e.localizedMessage}"
+                }
+            }
         }
     }
 
     Scaffold(
         containerColor = Color(0xFF09090B),
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = { runPythonScript() },
-                containerColor = Color(0xFF10B981),
-                contentColor = Color.White,
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text("▶ RUN", fontFamily = FontFamily.Monospace, modifier = Modifier.padding(horizontal = 12.dp))
-            }
+floatingActionButton = {
+    if (!isRunning) {
+        FloatingActionButton(
+            onClick = { runPythonScript() },
+            containerColor = Color(0xFF10B981),
+            contentColor = Color.White,
+            shape = RoundedCornerShape(12.dp),
+            // Tambahkan modifier.imePadding() di sini!
+            modifier = Modifier.imePadding() 
+        ) {
+            Text(
+                text = "▶ RUN", 
+                fontFamily = FontFamily.Monospace, 
+                modifier = Modifier.padding(horizontal = 12.dp)
+            )
         }
+    }
+}
     ) { innerPadding ->
         Column(
             modifier = Modifier
@@ -394,7 +436,6 @@ fun PysonEditorScreen(
                     }
                 }
 
-                // Tombol + Add File
                 IconButton(onClick = onAddFileClick, modifier = Modifier.size(32.dp)) {
                     Text("➕", color = Color(0xFF38BDF8), fontSize = 16.sp)
                 }
@@ -457,27 +498,35 @@ fun PysonEditorScreen(
                 }
             }
 
-            // Interactive Console Drawer (Fix Input Interactive & EOF Error)
+             // Interactive Console Drawer FIXED (No EOFError & FAB Hidden)
             if (isRunning) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(220.dp)
+                        .height(260.dp)
                         .background(Color(0xFF000000))
                         .padding(8.dp)
                 ) {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Text("Interactive Output", color = Color(0xFF10B981), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                         TextButton(onClick = { isRunning = false }) { Text("✕ Close", color = Color.Gray, fontSize = 12.sp) }
                     }
 
-                    Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .verticalScroll(consoleScrollState)
+                    ) {
                         Text(terminalOutput, color = Color(0xFF34D399), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                     }
 
-                    // Input Field khusus Console biar gak EOFError
+                    // Input Box yang Mengirim Data Langsung ke Python Stdin Stream
                     Row(
-                        modifier = Modifier.fillMaxWidth().background(Color(0xFF18181B)).padding(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF18181B), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("> ", color = Color(0xFF38BDF8), fontFamily = FontFamily.Monospace)
@@ -488,8 +537,11 @@ fun PysonEditorScreen(
                             cursorBrush = SolidColor(Color(0xFF38BDF8)),
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                             keyboardActions = KeyboardActions(onSend = {
-                                terminalOutput += "\n> $userInput"
+                                val sentText = userInput
                                 userInput = ""
+                                scope.launch {
+                                    inputChannel.send(sentText)
+                                }
                             }),
                             modifier = Modifier.fillMaxWidth()
                         )

@@ -25,6 +25,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
+import java.net.URL
 
 @Composable
 fun TerminalCLScreen(
@@ -38,7 +40,7 @@ fun TerminalCLScreen(
     var logs by remember { mutableStateOf(listOf("Pyson Shell [Version 1.0.0]", "Type 'help' or commands: ls, mkdir, rm, pip, py install git, git...")) }
     val scrollState = rememberScrollState()
 
-    // Folder tempat nyimpen binary CLI git internal
+    // Folder tempat simpan binary CLI git internal
     val binDir = remember { File(context.filesDir, "bin").apply { if (!exists()) mkdirs() } }
     val gitExecutable = remember { File(binDir, "git") }
 
@@ -48,23 +50,28 @@ fun TerminalCLScreen(
 
     // Fungsi buat nge-run perintah System Executable Native (Git CLI Asli)
     fun runNativeCommand(cmdParts: List<String>) {
-        try {
-            val processBuilder = ProcessBuilder(cmdParts)
-                .directory(workingDir)
-                .redirectErrorStream(true)
+        coroutineScope.launch(Dispatchers.IO) {
+            try {
+                val processBuilder = ProcessBuilder(cmdParts)
+                    .directory(workingDir)
+                    .redirectErrorStream(true)
 
-            // Tambah PATH biar kenal binary git di binDir
-            val env = processBuilder.environment()
-            env["PATH"] = "${binDir.absolutePath}:" + (env["PATH"] ?: "")
-            env["HOME"] = context.filesDir.absolutePath
+                val env = processBuilder.environment()
+                env["PATH"] = "${binDir.absolutePath}:" + (env["PATH"] ?: "")
+                env["HOME"] = context.filesDir.absolutePath
 
-            val process = processBuilder.start()
-            val output = process.inputStream.bufferedReader().readText()
-            process.waitFor()
+                val process = processBuilder.start()
+                val output = process.inputStream.bufferedReader().readText()
+                process.waitFor()
 
-            logs = logs + if (output.isEmpty()) "Command executed." else output
-        } catch (e: Exception) {
-            logs = logs + "❌ Execution Error: ${e.localizedMessage}"
+                withContext(Dispatchers.Main) {
+                    logs = logs + if (output.isEmpty()) "Command executed." else output
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    logs = logs + "❌ Execution Error: ${e.localizedMessage}"
+                }
+            }
         }
     }
 
@@ -78,6 +85,7 @@ fun TerminalCLScreen(
 
         when {
             command == "clear" -> logs = emptyList()
+            
             command == "ls" -> {
                 val files = workingDir.listFiles()
                 if (files.isNullOrEmpty()) {
@@ -89,6 +97,7 @@ fun TerminalCLScreen(
                     logs = logs + listStr
                 }
             }
+            
             command == "mkdir" -> {
                 if (parts.size > 1) {
                     val newDir = File(workingDir, parts[1])
@@ -96,6 +105,7 @@ fun TerminalCLScreen(
                     else logs = logs + "Failed to create directory."
                 } else logs = logs + "Usage: mkdir <folder_name>"
             }
+            
             command == "rm" -> {
                 if (parts.size > 1) {
                     val isRecursive = parts.contains("-rf") || parts.contains("-r")
@@ -108,40 +118,51 @@ fun TerminalCLScreen(
                     } else logs = logs + "File/Directory not found: $targetName"
                 } else logs = logs + "Usage: rm [-rf] <target>"
             }
+            
+            // FIX: PIP Handling via Chaquopy Launcher
             command == "pip" -> {
-                try {
-                    val py = Python.getInstance()
-                    val pipModule = py.getModule("pip")
-                    val args = parts.drop(1).toTypedArray()
-                    pipModule.callAttr("main", args)
-                    logs = logs + "pip command executed successfully."
-                } catch (e: Exception) {
-                    logs = logs + "pip error: ${e.localizedMessage}"
+                coroutineScope.launch(Dispatchers.IO) {
+                    try {
+                        val py = Python.getInstance()
+                        // Menggunakan pip internal installer Chaquopy / python module runner
+                        val sys = py.getModule("sys")
+                        val args = parts.drop(1).toTypedArray()
+                        
+                        // Panggil pip module via runtime runner
+                        val pipModule = py.getModule("pip._internal.cli.main")
+                        val code = pipModule.callAttr("main", args).toInt()
+                        
+                        withContext(Dispatchers.Main) {
+                            logs = logs + "pip finished with exit code: $code"
+                        }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) {
+                            logs = logs + "pip error: ${e.localizedMessage}\n(Note: Standalone PIP install at runtime requires build-time wheel config or Chaquopy target)"
+                        }
+                    }
                 }
             }
             
-            // INTISARI: Install Binary Git CLI Asli
+            // FIX: Pure Kotlin Download untuk Native Git CLI (Bebas SystemError)
             trimmed.startsWith("py install git") -> {
                 logs = logs + "🌀 Downloading Native Git CLI Binary for Android ARM64..."
                 coroutineScope.launch(Dispatchers.IO) {
                     try {
-                        // Download compiled git binary for android arm64
-                        val py = Python.getInstance()
-                        val pyScript = """
-import urllib.request
-import os
+                        val gitUrl = "https://raw.githubusercontent.com/its-pointless/its-pointless.github.io/master/bin/git"
+                        
+                        // Download lewat Kotlin I/O Stream
+                        URL(gitUrl).openStream().use { input ->
+                            FileOutputStream(gitExecutable).use { output ->
+                                input.copyTo(output)
+                            }
+                        }
 
-git_url = "https://raw.githubusercontent.com/its-pointless/its-pointless.github.io/master/bin/git"
-target_path = "${gitExecutable.absolutePath.replace("\\", "/")}"
-
-urllib.request.urlretrieve(git_url, target_path)
-os.chmod(target_path, 0o755) # Give execute permissions
-                        """.trimIndent()
-
-                        py.getModule("builtins").callAttr("exec", pyScript)
+                        // Beri izin akses Eksekusi (chmod +x / 0755)
+                        gitExecutable.setExecutable(true, false)
 
                         withContext(Dispatchers.Main) {
-                            logs = logs + "✅ Native Git CLI Installed! You can now use: git clone, push, pull, remote, etc."
+                            logs = logs + "✅ Native Git CLI Installed successfully!"
+                            logs = logs + "Location: ${gitExecutable.absolutePath}"
                         }
                     } catch (e: Exception) {
                         withContext(Dispatchers.Main) {
@@ -166,11 +187,13 @@ os.chmod(target_path, 0o755) # Give execute permissions
         }
     }
 
+    // Tambahan imePadding() & systemBarsPadding() biar terdorong keyboard HP
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF09090B))
             .systemBarsPadding()
+            .imePadding() 
     ) {
         // Header
         Row(
@@ -187,7 +210,7 @@ os.chmod(target_path, 0o755) # Give execute permissions
             }
         }
 
-        // Terminal Content
+        // Terminal Content Logs
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -206,12 +229,12 @@ os.chmod(target_path, 0o755) # Give execute permissions
             }
         }
 
-        // Input Line
+        // Input Line (Auto terangkat saat keyboard muncul)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(Color(0xFF121215))
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("$ ", color = Color(0xFF10B981), fontFamily = FontFamily.Monospace, fontSize = 14.sp)
