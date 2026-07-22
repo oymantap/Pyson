@@ -326,55 +326,57 @@ fun PysonEditorScreen(
         }
     }
 
-    fun runPythonScript() {
-        isRunning = true
-        terminalOutput = ">>> Running ${currentTab.file.name}...\n"
+ fun runPythonScript() {
+    isRunning = true
+    terminalOutput = ">>> Running ${currentTab.file.name}...\n"
 
-        scope.launch(Dispatchers.IO) {
-            try {
-                val py = Python.getInstance()
-                val sys = py.getModule("sys")
+    scope.launch(Dispatchers.IO) {
+        try {
+            val py = Python.getInstance()
+            val sys = py.getModule("sys")
 
-                // Custom Stdout / Stdin Bridge ke Kotlin
-                val customIO = object {
-                    // Dipanggil Python saat butuh output/print
-                    fun write(text: String) {
-                        scope.launch(Dispatchers.Main) {
-                            terminalOutput += text
-                        }
-                    }
-
-                    fun flush() {}
-
-                    // Dipanggil Python saat butuh input()
-                    fun readline(): String {
-                        // Menunggu user mengetik & kirim tombol Send di UI
-                        return kotlinx.coroutines.runBlocking {
-                            inputChannel.receive() + "\n"
-                        }
+            // Custom Stdout / Stdin Bridge ke Kotlin
+            val customIO = object {
+                // Dipanggil Python saat butuh output/print
+                fun write(text: String) {
+                    scope.launch(Dispatchers.Main) {
+                        terminalOutput += text
                     }
                 }
 
-                val pyBridge = py.getOutputRedirector() // Menggunakan PyObject Proxy / Module System
-                sys.put("stdout", customIO)
-                sys.put("stderr", customIO)
-                sys.put("stdin", customIO)
+                fun flush() {}
 
-                val builtins = py.getModule("builtins")
-                val globals = py.getModule("types").callAttr("ModuleType", "user_script").get("__dict__")
-
-                builtins.callAttr("exec", codeText.text, globals)
-
-                withContext(Dispatchers.Main) {
-                    terminalOutput += "\n\n[Process finished with exit code 0]"
+                // Dipanggil Python saat input()
+                fun readline(): String {
+                    return kotlinx.coroutines.runBlocking {
+                        inputChannel.receive() + "\n"
+                    }
                 }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    terminalOutput += "\n❌ ${e.localizedMessage}"
-                }
+            }
+
+            // HAPUS ATAU HILANGKAN BARIS INI:
+            // val pyBridge = py.getOutputRedirector() <--- HAPUS METHOD INI
+
+            // Cukup langsung set sys.stdout, stderr, & stdin ke customIO
+            sys.put("stdout", customIO)
+            sys.put("stderr", customIO)
+            sys.put("stdin", customIO)
+
+            val builtins = py.getModule("builtins")
+            val globals = py.getModule("types").callAttr("ModuleType", "user_script").get("__dict__")
+
+            builtins.callAttr("exec", codeText.text, globals)
+
+            withContext(Dispatchers.Main) {
+                terminalOutput += "\n\n[Process finished with exit code 0]"
+            }
+        } catch (e: Exception) {
+            withContext(Dispatchers.Main) {
+                terminalOutput += "\n❌ ${e.localizedMessage}"
             }
         }
     }
+}
 
     Scaffold(
         containerColor = Color(0xFF09090B),
