@@ -65,7 +65,6 @@ chaquopy {
             // Pasang library default yang mau langsung bundled ke APK (Opsional)
             install("requests")
             install("beautifulsoup4")
-            install("os")
             install("base68")
             
             // Opsi tambahan biar pip gak error pas runtime di HP
