@@ -23,8 +23,10 @@ import com.chaquo.python.Python
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.PrintStream
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -40,8 +42,8 @@ fun TerminalCLScreen(
     var logs by remember {
         mutableStateOf(
             listOf(
-                "Pyson Shell [Version 1.0.0]",
-                "Type 'help' or commands: ls, cd, mkdir, rm, pip, py install git, git..."
+                "Pyson Shell [Version 1.2.0]",
+                "Type 'help' or commands: ls, cd, python <file.py>, pip install <pkg>, git..."
             )
         )
     }
@@ -54,6 +56,55 @@ fun TerminalCLScreen(
         scrollState.animateScrollTo(scrollState.maxValue)
     }
 
+    // Runner khusus file Python via Terminal (support 'python file.py' atau 'py file.py')
+    fun runPythonScriptFile(fileName: String) {
+        val pyFile = File(workingDir, fileName)
+        if (!pyFile.exists() || !pyFile.isFile) {
+            logs = logs + "❌ File not found: $fileName"
+            return
+        }
+
+        logs = logs + "🚀 Executing ${pyFile.name}..."
+        coroutineScope.launch(Dispatchers.IO) {
+            try {
+                val py = Python.getInstance()
+                val code = pyFile.readText()
+
+                // Capture Output Stdout/Stderr
+                val outputStream = ByteArrayOutputStream()
+                val printStream = PrintStream(outputStream)
+
+                val oldOut = System.out
+                val oldErr = System.err
+                System.setOut(printStream)
+                System.setErr(printStream)
+
+                // Set sys.path biar module lokal di folder sama bisa di-import
+                val sys = py.getModule("sys")
+                val pathList = sys.get("path")
+                val currentPath = workingDir.absolutePath
+                py.getModule("builtins").callAttr("exec", "import sys; sys.path.insert(0, '$currentPath')")
+
+                // Eksekusi kode
+                val globals = py.getModule("types").callAttr("ModuleType", "__main__").get("__dict__")
+                py.getModule("builtins").callAttr("exec", code, globals)
+
+                System.setOut(oldOut)
+                System.setErr(oldErr)
+
+                val res = outputStream.toString()
+                withContext(Dispatchers.Main) {
+                    logs = logs + if (res.isEmpty()) "[Process finished with no output]" else res
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    logs = logs + "❌ Script Execution Error: ${e.localizedMessage}"
+                }
+            }
+        }
+    }
+
+    // Perintah Native System (Git CLI)
     fun runNativeCommand(cmdParts: List<String>) {
         coroutineScope.launch(Dispatchers.IO) {
             try {
@@ -80,6 +131,80 @@ fun TerminalCLScreen(
         }
     }
 
+    // Fungsi PIP Installer Runtime via PyPI API Stream
+    fun runPipInstall(packageName: String) {
+        logs = logs + "🌀 Installing '$packageName' via PyPI Direct Downloader..."
+        coroutineScope.launch(Dispatchers.IO) {
+            try {
+                val py = Python.getInstance()
+                val script = """
+import sys, os, urllib.request, json, zipfile, tarfile
+
+pkg = "$packageName"
+url = f"https://pypi.org/pypi/{pkg}/json"
+
+try:
+    req = urllib.request.urlopen(url)
+    data = json.loads(req.read().decode())
+    urls = data['urls']
+    
+    download_url = None
+    filename = ""
+    for u in urls:
+        if u['filename'].endswith('.whl') and 'py3-none-any' in u['filename']:
+            download_url = u['url']
+            filename = u['filename']
+            break
+            
+    if not download_url and len(urls) > 0:
+        download_url = urls[-1]['url']
+        filename = urls[-1]['filename']
+
+    if download_url:
+        site_packages = [p for p in sys.path if 'site-packages' in p or 'files' in p][0]
+        dest_file = os.path.join(site_packages, filename)
+        
+        urllib.request.urlretrieve(download_url, dest_file)
+        
+        if filename.endswith('.whl') or filename.endswith('.zip'):
+            with zipfile.ZipFile(dest_file, 'r') as zip_ref:
+                zip_ref.extractall(site_packages)
+        elif filename.endswith('.tar.gz') or filename.endswith('.tgz'):
+            with tarfile.open(dest_file, 'r:gz') as tar_ref:
+                tar_ref.extractall(site_packages)
+                
+        if os.path.exists(dest_file):
+            os.remove(dest_file)
+            
+        print(f"✅ Successfully installed {pkg} to {site_packages}")
+    else:
+        print(f"❌ Could not find compatible package release for {pkg}")
+except Exception as e:
+    print(f"❌ PIP Error: {str(e)}")
+                """.trimIndent()
+
+                val outputStream = ByteArrayOutputStream()
+                val printStream = PrintStream(outputStream)
+
+                val oldOut = System.out
+                System.setOut(printStream)
+                
+                py.getModule("builtins").callAttr("exec", script)
+                
+                System.setOut(oldOut)
+                val res = outputStream.toString()
+
+                withContext(Dispatchers.Main) {
+                    logs = logs + if (res.trim().isEmpty()) "Done." else res.trim()
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    logs = logs + "❌ PIP Installer Failed: ${e.localizedMessage}"
+                }
+            }
+        }
+    }
+
     fun executeCommand(cmdStr: String) {
         val trimmed = cmdStr.trim()
         if (trimmed.isEmpty()) return
@@ -94,13 +219,14 @@ fun TerminalCLScreen(
             command == "help" -> {
                 logs = logs + listOf(
                     "Available commands:",
-                    "  ls               - List directory files",
-                    "  cd <dir>         - Change directory",
-                    "  mkdir <name>     - Create folder",
-                    "  rm [-rf] <target>- Delete file/folder",
-                    "  pip <args>       - Chaquopy Package Manager notice",
-                    "  py install git   - Download & Install standalone Git binary",
-                    "  git <args>       - Execute Git CLI"
+                    "  ls                 - List directory files",
+                    "  cd <dir>           - Change directory",
+                    "  mkdir <name>       - Create folder",
+                    "  rm [-rf] <target>  - Delete file/folder",
+                    "  python <file.py>   - Run Python file (or 'py <file.py>')",
+                    "  pip install <pkg>  - Install Python package from PyPI",
+                    "  py install git     - Install standalone Native Git CLI",
+                    "  git <args>         - Execute Git CLI"
                 )
             }
 
@@ -151,34 +277,45 @@ fun TerminalCLScreen(
                 } else logs = logs + "Usage: rm [-rf] <target>"
             }
 
-            // FIX 1: PIP Handling - Menjelaskan limitation Chaquopy runtime
-            command == "pip" -> {
-                logs = logs + listOf(
-                    "⚠️ Chaquopy Runtime Notice:",
-                    "Runtime 'pip install' dynamic loading is restricted on Android.",
-                    "To add Python packages (like 'requests'), declare them in 'build.gradle.kts':",
-                    "  python { pip { install('requests') } }"
-                )
+            // SUPPORT UNTUK 'python main.py' ATAU 'py main.py'
+            (command == "python" || command == "py") && parts.size > 1 && parts[1] != "install" -> {
+                val targetFile = parts[1]
+                runPythonScriptFile(targetFile)
             }
 
-            // FIX 2: Download Git CLI dari mirror binary yang valid
+            // PIP INSTALLER
+            command == "pip" -> {
+                if (parts.size >= 3 && parts[1] == "install") {
+                    val pkg = parts[2]
+                    runPipInstall(pkg)
+                } else {
+                    logs = logs + "Usage: pip install <package_name>"
+                }
+            }
+
+            // GIT INSTALLER
             trimmed == "py install git" -> {
                 logs = logs + "🌀 Downloading Native Git CLI Binary for Android..."
                 coroutineScope.launch(Dispatchers.IO) {
                     try {
-                        // Binary Git ARM64 valid
-                        val gitUrl = "https://raw.githubusercontent.com/termux/termux-packages/master/packages/git/build.sh" // Fallback / Direct mirror
-                        val targetUrl = "https://github.com/its-pointless/its-pointless.github.io/raw/master/bin/git"
-
-                        val url = URL(targetUrl)
+                        val url = URL("https://github.com/its-pointless/its-pointless.github.io/raw/master/bin/git")
                         val connection = url.openConnection() as HttpURLConnection
                         connection.requestMethod = "GET"
-                        connection.setRequestProperty("User-Agent", "Mozilla/5.0")
+                        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile)")
                         connection.instanceFollowRedirects = true
-                        connection.connect()
+                        connection.connectTimeout = 10000
+                        connection.readTimeout = 10000
 
-                        if (connection.responseCode == HttpURLConnection.HTTP_OK) {
-                            connection.inputStream.use { input ->
+                        val responseCode = connection.responseCode
+                        if (responseCode == HttpURLConnection.HTTP_OK || responseCode == HttpURLConnection.HTTP_MOVED_TEMP) {
+                            val inputStream = if (responseCode == HttpURLConnection.HTTP_MOVED_TEMP) {
+                                val redirectUrl = connection.getHeaderField("Location")
+                                URL(redirectUrl).openStream()
+                            } else {
+                                connection.inputStream
+                            }
+
+                            inputStream.use { input ->
                                 FileOutputStream(gitExecutable).use { output ->
                                     input.copyTo(output)
                                 }
@@ -186,11 +323,10 @@ fun TerminalCLScreen(
                             gitExecutable.setExecutable(true, false)
                             withContext(Dispatchers.Main) {
                                 logs = logs + "✅ Native Git CLI Installed successfully!"
-                                logs = logs + "Location: ${gitExecutable.absolutePath}"
                             }
                         } else {
                             withContext(Dispatchers.Main) {
-                                logs = logs + "❌ HTTP Error ${connection.responseCode}: Unable to fetch binary."
+                                logs = logs + "❌ HTTP Error $responseCode: Binary host unavailable."
                             }
                         }
                     } catch (e: Exception) {

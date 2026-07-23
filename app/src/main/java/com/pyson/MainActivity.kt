@@ -40,7 +40,6 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import com.chaquo.python.PyObject
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import kotlinx.coroutines.Dispatchers
@@ -162,7 +161,6 @@ fun PysonSplashScreen(progress: Float) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PysonMainWorkspace() {
-    val context = LocalContext.current
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
@@ -254,6 +252,7 @@ fun PysonMainWorkspace() {
             PysonEditorScreen(
                 tabs = tabs,
                 activeTabIndex = activeTabIndex,
+                pysonDir = pysonDir,
                 onTabSelected = { activeTabIndex = it },
                 onOpenDrawer = { scope.launch { drawerState.open() } },
                 onAddFileClick = { showAddFileDialog = true }
@@ -295,6 +294,7 @@ fun PysonMainWorkspace() {
 fun PysonEditorScreen(
     tabs: MutableList<RealEditorTab>,
     activeTabIndex: Int,
+    pysonDir: File,
     onTabSelected: (Int) -> Unit,
     onOpenDrawer: () -> Unit,
     onAddFileClick: () -> Unit
@@ -329,6 +329,20 @@ fun PysonEditorScreen(
         scope.launch(Dispatchers.IO) {
             try {
                 val py = Python.getInstance()
+                val builtins = py.getModule("builtins")
+
+                // Set Working Directory aktif Python ke folder tempat file disimpan (PysonProjects)
+                val currentPath = pysonDir.absolutePath
+                builtins.callAttr(
+                    "exec",
+                    """
+                    import os, sys
+                    os.chdir('$currentPath')
+                    if '$currentPath' not in sys.path:
+                        sys.path.insert(0, '$currentPath')
+                    """.trimIndent()
+                )
+
                 val sys = py.getModule("sys")
 
                 val customIO = object {
@@ -355,9 +369,7 @@ fun PysonEditorScreen(
                 sys.put("stderr", customIO)
                 sys.put("stdin", customIO)
 
-                val builtins = py.getModule("builtins")
-                val globals = py.getModule("types").callAttr("ModuleType", "user_script").get("__dict__")
-
+                val globals = py.getModule("types").callAttr("ModuleType", "__main__").get("__dict__")
                 builtins.callAttr("exec", codeText.text, globals)
 
                 withContext(Dispatchers.Main) {
@@ -372,24 +384,7 @@ fun PysonEditorScreen(
     }
 
     Scaffold(
-        containerColor = Color(0xFF09090B),
-        floatingActionButton = {
-            if (!isRunning) {
-                FloatingActionButton(
-                    onClick = { runPythonScript() },
-                    containerColor = Color(0xFF10B981),
-                    contentColor = Color.White,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.imePadding()
-                ) {
-                    Text(
-                        text = "▶ RUN",
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.padding(horizontal = 12.dp)
-                    )
-                }
-            }
-        }
+        containerColor = Color(0xFF09090B)
     ) { innerPadding ->
         Column(
             modifier = Modifier
@@ -397,7 +392,7 @@ fun PysonEditorScreen(
                 .padding(innerPadding)
                 .imePadding()
         ) {
-            // Header Tabs
+            // Header Tabs + Tombol RUN
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -410,7 +405,9 @@ fun PysonEditorScreen(
                 }
 
                 Row(
-                    modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                    modifier = Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     tabs.forEachIndexed { index, tab ->
@@ -433,10 +430,37 @@ fun PysonEditorScreen(
                 IconButton(onClick = onAddFileClick, modifier = Modifier.size(32.dp)) {
                     Text("➕", color = Color(0xFF38BDF8), fontSize = 16.sp)
                 }
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                Button(
+                    onClick = { if (!isRunning) runPythonScript() },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isRunning) Color(0xFF374151) else Color(0xFF10B981)
+                    ),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(6.dp),
+                    enabled = !isRunning,
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text(
+                        text = if (isRunning) "⏳" else "▶ RUN",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = Color.White
+                    )
+                }
             }
 
-            // Code Editor
+            // Code Editor & Fixed Line Numbers
             val scrollState = rememberScrollState()
+            
+            // Menghitung jumlah baris berdasarkan isi teks secara real-time
+            val lineCount = remember(codeText.text) {
+                val count = codeText.text.count { it == '\n' } + 1
+                maxOf(1, count)
+            }
+
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -446,21 +470,41 @@ fun PysonEditorScreen(
                         focusRequester.requestFocus()
                     }
             ) {
-                Row(modifier = Modifier.fillMaxSize().verticalScroll(scrollState).padding(vertical = 8.dp)) {
-                    val lines = codeText.text.split("\n")
-                    val lineCount = if (lines.isEmpty()) 1 else lines.size
-
-                    Column(modifier = Modifier.padding(start = 12.dp, end = 12.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(scrollState)
+                        .padding(vertical = 8.dp)
+                ) {
+                    // Column Nomor Baris (Menyesuaikan jumlah baris secara dinamis tanpa batas)
+                    Column(
+                        modifier = Modifier.padding(start = 12.dp, end = 12.dp),
+                        horizontalAlignment = Alignment.End
+                    ) {
                         for (i in 1..lineCount) {
-                            Text(text = "$i", color = Color(0xFF52525B), fontSize = 13.sp, fontFamily = FontFamily.Monospace, lineHeight = 20.sp)
+                            Text(
+                                text = "$i",
+                                color = Color(0xFF52525B),
+                                fontSize = 13.sp,
+                                fontFamily = FontFamily.Monospace,
+                                lineHeight = 20.sp
+                            )
                         }
                     }
 
+                    // Input Text Area
                     BasicTextField(
                         value = codeText,
                         onValueChange = { codeText = it },
-                        modifier = Modifier.fillMaxSize().focusRequester(focusRequester),
-                        textStyle = TextStyle(color = Color(0xFFF8FAFC), fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 20.sp),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .focusRequester(focusRequester),
+                        textStyle = TextStyle(
+                            color = Color(0xFFF8FAFC),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 13.sp,
+                            lineHeight = 20.sp
+                        ),
                         cursorBrush = SolidColor(Color(0xFF38BDF8)),
                         keyboardOptions = KeyboardOptions(autoCorrect = false)
                     )
@@ -487,12 +531,18 @@ fun PysonEditorScreen(
                         shape = RoundedCornerShape(6.dp),
                         color = Color(0xFF27272A)
                     ) {
-                        Text(text = symbol, color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp))
+                        Text(
+                            text = symbol,
+                            color = Color.White,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
                     }
                 }
             }
 
-            // Interactive Console Panel (Fixed Height & Stream Input)
+            // Interactive Console Panel
             if (isRunning) {
                 Column(
                     modifier = Modifier
