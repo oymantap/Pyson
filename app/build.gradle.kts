@@ -62,12 +62,15 @@ chaquopy {
         
         // --- KONFIGURASI PIP DISINI ---
         pip {
-            // Pasang library default yang mau langsung bundled ke APK (Opsional)
+            // Web Scraping & Networking
             install("requests")
             install("beautifulsoup4")
-            install("base68")
             
-            // Opsi tambahan biar pip gak error pas runtime di HP
+            // Utility Waktu & Teks
+            install("python-dateutil")
+            install("colorama")
+            
+            // Opsi tambahan
             options("--extra-index-url", "https://pypi.org/simple")
         }
     }
