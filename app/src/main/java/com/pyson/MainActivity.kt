@@ -230,7 +230,7 @@ fun PysonMainWorkspace() {
                                 },
                                 modifier = Modifier.size(20.dp)
                             ) {
-                                Text("🗑", fontSize = 12.sp)
+                                Text("X", fontSize = 12.sp)
                             }
                         }
                     }
@@ -307,7 +307,8 @@ fun PysonEditorScreen(
     var userInput by remember { mutableStateOf("") }
     var isRunning by remember { mutableStateOf(false) }
 
-    val inputChannel = remember { Channel<String>(Channel.UNLIMITED) }
+    // Channel direfresh tiap kali sesi run dimulai
+    var inputChannel by remember { mutableStateOf(Channel<String>(Channel.UNLIMITED)) }
     val focusRequester = remember { FocusRequester() }
     val consoleScrollState = rememberScrollState()
 
@@ -325,13 +326,13 @@ fun PysonEditorScreen(
     fun runPythonScript() {
         isRunning = true
         terminalOutput = ">>> Running ${currentTab.file.name}...\n"
+        inputChannel = Channel(Channel.UNLIMITED) // Reset channel baru untuk run session ini
 
         scope.launch(Dispatchers.IO) {
             try {
                 val py = Python.getInstance()
                 val builtins = py.getModule("builtins")
 
-                // Set Working Directory aktif Python ke folder tempat file disimpan (PysonProjects)
                 val currentPath = pysonDir.absolutePath
                 builtins.callAttr(
                     "exec",
@@ -355,13 +356,14 @@ fun PysonEditorScreen(
                     fun flush() {}
 
                     fun readline(): String {
-                        return kotlinx.coroutines.runBlocking {
-                            val inputVal = inputChannel.receive()
-                            withContext(Dispatchers.Main) {
-                                terminalOutput += "$inputVal\n"
-                            }
-                            inputVal + "\n"
+                        // Mengambil input terkirim secara synchronous untuk Python thread
+                        val inputVal = kotlinx.coroutines.runBlocking { inputChannel.receive() }
+                        
+                        scope.launch(Dispatchers.Main) {
+                            terminalOutput += "$inputVal\n"
                         }
+                        
+                        return inputVal + "\n"
                     }
                 }
 
@@ -373,11 +375,15 @@ fun PysonEditorScreen(
                 builtins.callAttr("exec", codeText.text, globals)
 
                 withContext(Dispatchers.Main) {
-                    terminalOutput += "\n\n[Process finished with exit code 0]"
+                    terminalOutput += "\n[Process finished with exit code 0]"
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    terminalOutput += "\n❌ ${e.localizedMessage}"
+                    terminalOutput += "\n⚠ ${e.localizedMessage}"
+                }
+            } finally {
+                withContext(Dispatchers.Main) {
+                    isRunning = false
                 }
             }
         }
@@ -455,7 +461,6 @@ fun PysonEditorScreen(
             // Code Editor & Fixed Line Numbers
             val scrollState = rememberScrollState()
             
-            // Menghitung jumlah baris berdasarkan isi teks secara real-time
             val lineCount = remember(codeText.text) {
                 val count = codeText.text.count { it == '\n' } + 1
                 maxOf(1, count)
@@ -466,7 +471,10 @@ fun PysonEditorScreen(
                     .fillMaxWidth()
                     .weight(1f)
                     .background(Color(0xFF09090B))
-                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
                         focusRequester.requestFocus()
                     }
             ) {
@@ -476,7 +484,7 @@ fun PysonEditorScreen(
                         .verticalScroll(scrollState)
                         .padding(vertical = 8.dp)
                 ) {
-                    // Column Nomor Baris (Menyesuaikan jumlah baris secara dinamis tanpa batas)
+                    // Column Nomor Baris
                     Column(
                         modifier = Modifier.padding(start = 12.dp, end = 12.dp),
                         horizontalAlignment = Alignment.End
@@ -586,7 +594,8 @@ fun PysonEditorScreen(
                             cursorBrush = SolidColor(Color(0xFF38BDF8)),
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                             keyboardActions = KeyboardActions(onSend = {
-                                val sentText = userInput
+                                // Membersihkan newline ekstra dari keyboard HP
+                                val sentText = userInput.trim()
                                 userInput = ""
                                 scope.launch {
                                     inputChannel.send(sentText)
